@@ -18,8 +18,8 @@ adam_params_dict: {
 }
 
 # Training parameters
-num_epochs: 400
-batch_size: 32
+num_epochs: 1
+batch_size: 2
 num_workers: 8
 
 # GPU configuration (use list for multiple GPUs)
@@ -30,8 +30,7 @@ subtomo_size: 128
 mw_angle: 50
 
 # Data directories
-subtomo_dir: "path/to/subtomos"
-project_dir: "path/to/project"
+project_dir: "tutorial"
 
 # N2V specific parameters
 n2v_masked_pixel_percentage: 0.2  # Percentage of pixels to mask (0.05 to 10.0)
@@ -56,5 +55,5 @@ persistent_workers: true
 
 # Missing wedge parameters (optional)
 apply_missing_wedge: true
-mw_update_every_n_epochs: 10
-mw_update_start_epoch: 50
+mw_update_every_n_epochs: float('inf')
+mw_update_start_epoch: float('inf')
