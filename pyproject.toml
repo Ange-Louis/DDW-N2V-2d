@@ -1,0 +1,49 @@
+[project]
+name = "ddw-n2v-2d"
+version = "0.1.0"
+description = "Noise2Void implementation for DDW-N2V-2d with CUDA/MPS support"
+readme = "N2V_IMPLEMENTATION.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "pytorch-lightning>=2.2.0",
+    "typer>=0.12.0",
+    "typer-config>=0.3.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "tqdm>=4.66.0",
+    "matplotlib>=3.7.0",
+    "mrcfile>=1.4.0",
+    "starfile>=0.5.0",
+    "scikit-image>=0.20.0",
+    "accelerate>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.8.0",
+    "jupyter>=1.0.0",
+    "ipykernel>=6.29.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

@@ -1,0 +1,60 @@
+# Example configuration file for DDW-N2V-2d training
+# This file can be used with the --yaml-config parameter in fit_n2v_model.py
+
+# U-Net model parameters
+unet_params_dict: {
+  chans: 64,
+  num_downsample_layers: 3,
+  drop_prob: 0.3,
+  num_classes: 1
+}
+
+# Adam optimizer parameters
+adam_params_dict: {
+  lr: 4e-2,
+  betas: [0.9, 0.999],
+  eps: 1e-8,
+  weight_decay: 0
+}
+
+# Training parameters
+num_epochs: 400
+batch_size: 32
+num_workers: 8
+
+# GPU configuration (use list for multiple GPUs)
+gpu: 0  # Use 0 for first GPU, [0,1] for multiple GPUs
+
+# Subtomogram parameters
+subtomo_size: 128
+mw_angle: 50
+
+# Data directories
+subtomo_dir: "path/to/subtomos"
+project_dir: "path/to/project"
+
+# N2V specific parameters
+n2v_masked_pixel_percentage: 0.2  # Percentage of pixels to mask (0.05 to 10.0)
+n2v_roi_size: 11  # Size of the region for pixel replacement (must be odd, 3-21)
+n2v_strategy: "uniform"  # "uniform" for original N2V, "median" for N2V2
+
+# PyTorch Lightning parameters
+precision: 16  # 16 for mixed precision, 32 for full precision
+accelerator: "auto"  # "auto", "cuda", "mps", or "cpu"
+devices: "auto"  # "auto" or specify number of devices
+
+# Logging and checkpointing
+log_every_n_steps: 10
+check_val_every_n_epoch: 5
+save_top_k: 3
+monitor: "val_loss"
+
+# Advanced parameters
+shuffle: true
+pin_memory: true
+persistent_workers: true
+
+# Missing wedge parameters (optional)
+apply_missing_wedge: true
+mw_update_every_n_epochs: 10
+mw_update_start_epoch: 50

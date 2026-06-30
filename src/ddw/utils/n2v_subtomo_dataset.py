@@ -1,6 +1,7 @@
 """Noise2Void subtomogram dataset for DDW-N2V-2d."""
 
 import os
+from typing import Optional
 from pathlib import Path
 import time
 import torch
