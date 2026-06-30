@@ -1,0 +1,348 @@
+# %%
+"""
+Noise2Void model fitting for DDW-N2V-2d.
+
+This script provides a PyTorch Lightning-based implementation of Noise2Void
+for denoising and missing wedge reconstruction on sub-tomograms.
+"""
+
+import ast
+import inspect
+import os
+import glob
+from pathlib import Path
+from typing import Optional, Union, List
+
+import pytorch_lightning as pl
+import typer
+import torch
+from typer_config import conf_callback_factory
+from typing_extensions import Annotated
+
+from src.ddw.utils.load_function_args_from_yaml_config import \
+    load_function_args_from_yaml_config
+from src.ddw.utils.n2v_subtomo_dataset import N2VSubtomoDataset
+from src.ddw.utils.n2v_unet2 import LitN2VUnet2D
+from src.ddw.utils.n2v_utils import N2VConfig, PixelManipulationStrategy
+from src.ddw.utils.dataloader import MultiEpochsDataLoader as DataLoader
+
+
+loader = lambda yaml_config_file: load_function_args_from_yaml_config(
+    function=fit_n2v_model, yaml_config_file=yaml_config_file
+)
+callback = conf_callback_factory(loader)
+
+
+def fit_n2v_model(
+    unet_params_dict: Annotated[
+        str,
+        typer.Option(
+            callback=ast.literal_eval,
+            help=f"Dictionary of parameters for the U-Net model.",
+        ),
+    ],
+    adam_params_dict: Annotated[
+        str,
+        typer.Option(
+            callback=ast.literal_eval,
+            help="Dictionary of parameters for PyTorch's Adam optimizer.",
+        ),
+    ],
+    num_epochs: Annotated[int, typer.Option(help="Number of epochs to fit the model.")],
+    batch_size: Annotated[int, typer.Option(help="Batch size for the optimizer.")],
+    subtomo_size: Annotated[
+        int, typer.Option(help="Size of the cubic subtomograms used for model fitting.")
+    ],
+    mw_angle: Annotated[
+        float, typer.Option(help="Width of the missing wedge in degrees.")
+    ],
+    gpu: Annotated[Union[int, List[int]], typer.Option(help="Which GPU(s) to use for model fitting. Example: gpu=0 uses the first GPU, gpu=[0,1] uses the first two GPUs.")],
+    num_workers: Annotated[
+        int,
+        typer.Option(
+            help="Number of CPU workers to use for data loading. If fitting is slow, try increasing this number."
+        ),
+    ],
+    subtomo_dir: Annotated[
+        Optional[str],
+        typer.Option(
+            help="Path to the directory containing the subtomograms. If subtomo_dir is not provided, subtomo_dir is set to '{project_dir}/subtomos'."
+        ),
+    ] = None,
+    project_dir: Annotated[
+        Optional[str],
+        typer.Option(
+            help="If either subtomo_dir or logdir is not provided, project_dir must be provided, and the missing directory will be set to '{project_dir}/subtomos' or '{project_dir}/logs'."
+        ),
+    ] = None,
+    logdir: Annotated[
+        Optional[str],
+        typer.Option(
+            help="Path to the directory where the model checkpoints and logs will be saved. If logdir is not provided, logdir is set to '{project_dir}/logs'."
+        ),
+    ] = None,
+    logger: Annotated[
+        str,
+        typer.Option(
+            help="Which PyTorch Lightning logger to use. Choose from 'tensorboard' or 'csv'."
+        ),
+    ] = "tensorboard",
+    check_val_every_n_epochs: Annotated[
+        int, typer.Option(help="Check validation loss every n epochs.")
+    ] = 10,
+    update_subtomo_missing_wedges_every_n_epochs: Annotated[
+        int,
+        typer.Option(
+            help="After how many epochs to update the missing wedge in the subtomograms. Switch off, set float('inf')"
+        ),
+    ] = 10,
+    save_model_every_n_epochs: Annotated[
+        int, typer.Option(help="Save a model checkpoint to logdir every n epochs.")
+    ] = 10,
+    save_n_models_with_lowest_fitting_loss: Annotated[
+        int,
+        typer.Option(help="Save the n models with the lowest fitting loss to logdir."),
+    ] = 5,
+    save_n_models_with_lowest_val_loss: Annotated[
+        int,
+        typer.Option(
+            help="Save the n models with the lowest validation loss to logdir."
+        ),
+    ] = 5,
+    resume_from_checkpoint: Annotated[
+        Optional[str], typer.Option(help="Continue model fitting from a checkpoint.")
+    ] = None,
+    distributed_backend: Annotated[
+        str, 
+        typer.Option(help="Distributed backend to use when fitting on multiple GPUs, e.g, 'nccl' (default) or 'gloo'. Ignored if fitting on a single GPU.")
+    ] = "nccl",
+    seed: Annotated[
+        Optional[int], typer.Option(help="Seed for reproducibility.")
+    ] = None,
+    mw_weight: Annotated[
+        float,
+        typer.Option(help="Weight for the loss inside the missing wedge region relative to the outside region. Higher values prioritize missing wedge reconstruction (default: 2.0).")
+    ] = 2.0,
+    rotate_fitting_subtomos: Annotated[
+        bool,
+        typer.Option(help="Whether to rotate fitting subtomograms during processing (default: True).")
+    ] = True,
+    rotate_val_subtomos: Annotated[
+        bool,
+        typer.Option(help="Whether to rotate validation subtomograms during processing (default: True).")
+    ] = True,
+    # N2V specific parameters
+    n2v_masked_pixel_percentage: Annotated[
+        float,
+        typer.Option(help="Percentage of pixels to mask for N2V training (default: 0.2).")
+    ] = 0.2,
+    n2v_roi_size: Annotated[
+        int,
+        typer.Option(help="Size of the region of interest for N2V pixel manipulation (default: 11).")
+    ] = 11,
+    n2v_strategy: Annotated[
+        str,
+        typer.Option(help="Strategy for N2V pixel manipulation: 'uniform' or 'median' (default: 'uniform').")
+    ] = "uniform",
+    config: Annotated[
+        Optional[str],
+        typer.Option(
+            callback=callback,
+            is_eager=True,
+            help="Path to a yaml file containing the arguments for this function. Command line arguments will overwrite the ones in the yaml file.",
+        ),
+    ] = None,
+):
+    """
+    Fit a U-Net model using Noise2Void for denoising and missing wedge reconstruction on sub-tomograms.
+    
+    This is a self-supervised approach that only requires a single set of subtomograms,
+    unlike Noise2Noise which requires pairs of subtomograms.
+    """
+    pl.seed_everything(seed, workers=True)
+    
+    # Setup directories
+    if subtomo_dir is None:
+        if project_dir is not None:
+            subtomo_dir = f"{project_dir}/subtomos"
+        else:
+            raise ValueError(
+                "If project_dir is not provided, subtomo_dir must be provided."
+            )
+    if logdir is None:
+        if project_dir is not None:
+            logdir = f"{project_dir}/logs"
+        else:
+            raise ValueError("If project_dir is not provided, logdir must be provided.")
+    logdir = Path(logdir)
+    
+    # Setup logger
+    if not os.path.exists(logdir.parent):
+        os.makedirs(logdir.parent)
+    if logger == "tensorboard":
+        logger = pl.loggers.TensorBoardLogger(logdir.parent, name=logdir.name)
+    elif logger == "csv":
+        logger = pl.loggers.CSVLogger(logdir.parent, name=logdir.name)
+    else:
+        raise ValueError(
+            f"Logger '{logger}' not recognized. Choose from 'tensorboard' or 'csv'."
+        )
+    logdir = f"{logger.save_dir}/{logger.name}/version_{logger.version}"
+    print(f"Saving logs and model checkpoints to '{logdir}'")
+
+    # Check if there are subtomos for validation
+    val_data_exists = (
+        os.path.exists(f"{subtomo_dir}/val_subtomos")
+        and len(glob.glob(f"{subtomo_dir}/val_subtomos/**/*.pt")) > 0
+    )
+    if not val_data_exists:
+        print(
+            "Running model fitting without validation, as no validation data was found!"
+        )
+
+    if not subtomo_size % (2 ** unet_params_dict["num_downsample_layers"]) == 0:
+        raise ValueError(
+            f"subtomo_size must be divisible by 2^unet_params_dict['num_downsample_layers'] to ensure compatibility with the U-Net architecture. "
+            f"Got subtomo_size={subtomo_size} and num_downsample_layers={unet_params_dict['num_downsample_layers']}."
+        )
+
+    # Setup N2V configuration
+    n2v_config = N2VConfig(
+        masked_pixel_percentage=n2v_masked_pixel_percentage,
+        roi_size=n2v_roi_size,
+        strategy=PixelManipulationStrategy(n2v_strategy),
+        remove_center=True,
+        seed=seed if seed is not None else 888
+    )
+
+    # Setup datasets
+    fitting_dataset = N2VSubtomoDataset(
+        subtomo_dir=f"{subtomo_dir}/fitting_subtomos",
+        crop_subtomos_to_size=subtomo_size,
+        mw_angle=mw_angle,
+        rotate_subtomos=rotate_fitting_subtomos,
+        deterministic_rotations=False,
+        n2v_config=n2v_config,
+    )
+    if val_data_exists:
+        val_dataset = N2VSubtomoDataset(
+            subtomo_dir=f"{subtomo_dir}/val_subtomos",
+            crop_subtomos_to_size=subtomo_size,
+            mw_angle=mw_angle,
+            rotate_subtomos=rotate_val_subtomos,
+            deterministic_rotations=True,
+            n2v_config=n2v_config,
+        )
+    
+    # Setup callbacks
+    callbacks = []
+    epoch_callback = pl.callbacks.ModelCheckpoint(
+        dirpath=f"{logdir}/checkpoints/epoch",
+        filename="{epoch}",
+        monitor="epoch",
+        verbose=True,
+        save_top_k=-1,
+        every_n_epochs=save_model_every_n_epochs,
+        save_on_train_epoch_end=True,
+    )
+    callbacks.append(epoch_callback)
+    
+    if save_n_models_with_lowest_fitting_loss > 0:
+        fitting_loss_callback = pl.callbacks.ModelCheckpoint(
+            dirpath=f"{logdir}/checkpoints/fitting_loss",
+            filename="{epoch}-{fitting_loss:.5f}",
+            monitor="fitting_loss",
+            verbose=True,
+            save_top_k=save_n_models_with_lowest_fitting_loss,
+            save_on_train_epoch_end=True,
+        )
+        callbacks.append(fitting_loss_callback)
+    
+    if save_n_models_with_lowest_val_loss > 0 and val_data_exists:
+        val_loss_callback = pl.callbacks.ModelCheckpoint(
+            dirpath=f"{logdir}/checkpoints/val_loss",
+            filename="{epoch}-{val_loss:.5f}",
+            monitor="val_loss",
+            verbose=True,
+            save_top_k=save_n_models_with_lowest_val_loss,
+        )
+        callbacks.append(val_loss_callback)
+    
+    # Initialize the model
+    lit_unet = LitN2VUnet2D(
+        unet_params=unet_params_dict,
+        adam_params=adam_params_dict,
+        subtomo_dir=subtomo_dir,
+        mw_weight=mw_weight,
+        update_subtomo_missing_wedges_every_n_epochs=update_subtomo_missing_wedges_every_n_epochs,
+    )
+    
+    # Initialize the trainer
+    devices = [gpu] if isinstance(gpu, int) else gpu
+    strategy = pl.strategies.DDPStrategy(
+        process_group_backend=distributed_backend, 
+        find_unused_parameters=False,
+    ) if len(devices) > 1 else "auto"
+
+    trainer = pl.Trainer(
+        max_epochs=num_epochs,
+        accelerator="gpu",
+        devices=devices,
+        strategy=strategy,
+        check_val_every_n_epoch=(
+            check_val_every_n_epochs if val_data_exists else num_epochs
+        ),
+        deterministic=True,
+        logger=logger,
+        callbacks=callbacks,
+        detect_anomaly=True,
+    )
+
+    # Setup dataloaders
+    fitting_dataloader = DataLoader(
+        dataset=fitting_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        persistent_workers=True,
+        pin_memory=True,
+    )
+    if val_data_exists:
+        val_dataloader = DataLoader(
+            dataset=val_dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            shuffle=False,
+            pin_memory=True,
+        )
+    else:
+        val_dataloader = None
+    
+    # Fit the model
+    if val_data_exists and resume_from_checkpoint is None:
+        trainer.validate(lit_unet, val_dataloader)
+    trainer.fit(
+        model=lit_unet,
+        train_dataloaders=fitting_dataloader,
+        val_dataloaders=val_dataloader,
+    )
+
+
+# Example usage
+if __name__ == "__main__":
+    fit_n2v_model(
+        unet_params_dict={'chans': 64, 'num_downsample_layers': 3, 'drop_prob': 0.3},
+        adam_params_dict={'lr': 4e-2},
+        num_epochs=400,
+        batch_size=32,
+        num_workers=8,
+        gpu=0,
+        subtomo_size=128,
+        mw_angle=50,
+        subtomo_dir="testing/subtomos",
+        project_dir="testing2",
+        check_val_every_n_epochs=1,
+        save_model_every_n_epochs=float('inf'),
+        n2v_masked_pixel_percentage=0.2,
+        n2v_roi_size=11,
+        n2v_strategy="uniform",
+    )
