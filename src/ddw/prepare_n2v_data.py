@@ -78,7 +78,7 @@ def prepare_n2v_data(
         typer.Option(
             help="If True, larger subtomograms with a size of 'subtomo_size*sqrt(2)' will be extracted in order to avoid boundary effects when rotating the subtomograms."
         ),
-    ] = True,
+    ] = False,
     standardize_full_tomos: Annotated[
         bool,
         typer.Option(
@@ -113,7 +113,7 @@ def prepare_n2v_data(
         Optional[int],
         typer.Option(help="Controls the randomness of the validation data selection."),
     ] = None,
-    verbose: Annotated[bool, typer.Option()] = True,
+    verbose: Annotated[bool, typer.Option()] = False,
     config: Annotated[
         Optional[Path],
         typer.Option(
@@ -283,12 +283,12 @@ def setup_n2v_tomo_dir(data_dir, subtomo_dir, tomo_name):
     return tomo_dir, fitting_subtomo_dir, val_subtomo_dir
 
 
-if __name__ == "__main__":
-    prepare_n2v_data(
-        tomo_files=["/path/to/your/tomogram.rec"],
-        subtomo_size=128,
-        project_dir="testing_n2v",
-        overwrite=True,
-        subtomo_extraction_strides=[80, 80],
-        extract_larger_subtomos_for_rotating=False,
-    )
+# if __name__ == "__main__":
+#     prepare_n2v_data(
+#         tomo_files=["/path/to/your/tomogram.rec"],
+#         subtomo_size=128,
+#         project_dir="testing_n2v",
+#         overwrite=True,
+#         subtomo_extraction_strides=[80, 80],
+#         extract_larger_subtomos_for_rotating=False,
+#     )

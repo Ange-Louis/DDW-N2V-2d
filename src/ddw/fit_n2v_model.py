@@ -11,7 +11,7 @@ import inspect
 import os
 import glob
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import Optional, List
 
 import pytorch_lightning as pl
 import typer
@@ -56,7 +56,7 @@ def fit_n2v_model(
     mw_angle: Annotated[
         float, typer.Option(help="Width of the missing wedge in degrees.")
     ],
-    gpu: Annotated[Union[int, List[int]], typer.Option(help="Which GPU(s) to use for model fitting. Example: gpu=0 uses the first GPU, gpu=[0,1] uses the first two GPUs.")],
+    gpu: Annotated[List[int], typer.Option(help="Which GPU(s) to use for model fitting. Example: gpu=0 uses the first GPU, gpu=[0,1] uses the first two GPUs.")],
     num_workers: Annotated[
         int,
         typer.Option(

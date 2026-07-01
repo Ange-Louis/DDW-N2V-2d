@@ -1,5 +1,5 @@
 [project]
-name = "ddw-n2v-2d"
+name = "DDW-N2V-2D"
 version = "0.1.0"
 description = "Noise2Void implementation for DDW-N2V-2d with CUDA/MPS support"
 readme = "N2V_IMPLEMENTATION.md"
@@ -47,3 +47,6 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ddw"]
